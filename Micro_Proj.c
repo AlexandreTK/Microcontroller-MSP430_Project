@@ -44,6 +44,8 @@
 #define TX BIT2
 /* END */
 
+#define DELAY_PUNCHES 100
+#define PUNCH_THRESHOLD 30000
 
 /* 
  *  MPU6050 
@@ -63,12 +65,9 @@ struct MPU_Data {
 };
 
 unsigned char RX_Data[15];
-unsigned char TX_Data[2];
-unsigned char RX_ByteCtr;
-unsigned char TX_ByteCtr;
-
-struct MPU_Data mpu_data;
-
+volatile unsigned char TX_Data[2];
+volatile unsigned char RX_ByteCtr;
+volatile unsigned char TX_ByteCtr;
 
 void i2cInit(void);
 void i2cWrite(unsigned char);
@@ -100,24 +99,39 @@ int main(void)
   P1SEL |= SCL_PIN + SDA_PIN;         // Assign I2C pins to USCI_B0
   P1SEL2|= SCL_PIN + SDA_PIN;         // Assign I2C pins to USCI_B0
 
-  setup_UART();
-  volatile unsigned char frase[] = "1) Test I2C\n";
-  displayMsg(frase);
+
 
   // Initialize the I2C state machine
+  Atraso_ms(10000);
   i2cInit();
-  WakeUpMPU();
+  //Atraso_ms(1000);
 
+  //SleepMPU();
+  //Atraso_ms(100);
+  //WakeUpMPU();
 
-      
-  while (1)MS
+  Atraso_ms(10000);
+  setup_UART();
+  my_printf("%s", "1) Test I2C\n");
+
+  struct MPU_Data mpu_data[10];
+  volatile unsigned char mpu_vector_position = 0;
+  volatile unsigned char punch = 0;
+  volatile long next_punch = 0;
+  while (1 | mpu_vector_position++)
   {
-
+    if(mpu_vector_position >= 10) {
+      mpu_vector_position = 0;
+    }
       
     if(data_in == '2') {
-      volatile unsigned char frase3[] = "2) Test I2C\n";
-      displayMsg(frase3);
+      my_printf("Punches = %i, now = 0", punch);
+      punch = 0;
+      
+      my_printf("Next Punches = %l, now = 0", next_punch);
+      next_punch = 0;
 
+      
       data_in = 0;          
     }
     
@@ -129,18 +143,154 @@ int main(void)
       data_in = 0;    
     }
 
-
-    getMPUData(&mpu_data);
-
-    if(data_in == '4') {
-
     
-    printMPUData(&mpu_data);
+    if(data_in == '4') {
+      printMPUData(&mpu_data[mpu_vector_position]);
+      
+      data_in = 0;    
+    }  
+    
+    if(data_in == '5') {
+      for(volatile unsigned char i = 0; i< 10; i++) {
+        printMPUData(&mpu_data[i]);
+       // my_printf("%x\n", &mpu_data[i]);
+      }
          
       data_in = 0;    
     }  
 
+    
+    if(data_in == '6') {
+      //my_printf("%i\n", mpu_vector_position);
+      //my_printf("Before\n");
+      // Values from -3(mpu_vector_position-3) to -9
+      long avgBefore6 = getAverageAcell(mpu_data, mpu_vector_position - 3, 7, 10);
+      my_printf("Accel - Avg Before%l\n",avgBefore6);
+      //my_printf("After\n");
+      // Values from 0(mpu_vector_position) to -2
+      long avgAfter6 = getAverageAcell(mpu_data, mpu_vector_position, 3, 10);
+      my_printf("Accel - Avg After%l\n",avgAfter6);
+      //my_printf("Accel - Abs After%l\n",my_abs_32(avgAfter6));
+
+      data_in = 0;    
+    }  
+
+
+    if(data_in == 's') {
+      WakeUpMPU();
+      
+      data_in = 0;    
+    }  
+    
+    if(data_in == 'x') {
+      SleepMPU();
+      
+      data_in = 0;    
+    }  
+    
+    getMPUData(&(mpu_data[mpu_vector_position]));
+    Atraso_ms(10); // Maybe change this valeu -- without it we get some wrong results.
+
+    
+    if(next_punch <= DELAY_PUNCHES) {
+      next_punch++;
+    }
+    else {
+      long avgBefore = getAverageAcell(mpu_data, mpu_vector_position - 3, 7, 10);
+      long avgAfter = getAverageAcell(mpu_data, mpu_vector_position, 3, 10);
+      long dif = (avgAfter - avgBefore);
+      if(my_abs_32(dif) > PUNCH_THRESHOLD && next_punch >= DELAY_PUNCHES) {
+        next_punch = 0;
+        my_printf("Punch %i\n", ++punch);
+        //Atraso_ms(100000); // Instead of this something else ... continue analysing data but do not consider it a punch
+     
+      }
+    }
   }
+}
+
+long getAverageAcell(struct MPU_Data * mpu_data_ptr, volatile char startPos, unsigned char totalPos, unsigned char vecSize) {
+        struct MPU_Data * mpu_data;
+        
+        volatile long sumX = 0;
+        volatile long sumY = 0;
+        volatile long sumZ = 0;
+        
+        for(volatile char i = startPos; i > (startPos - totalPos) ; i--) {
+          if (i >= 0) {
+            mpu_data = (mpu_data_ptr + i );
+            sumX += mpu_data->xAccel;
+            sumY += mpu_data->yAccel;
+            sumZ += mpu_data->zAccel;
+            //my_printf("%i) %i - AccelX = %i\n", i, i , mpu_data->xAccel);
+
+          } else {
+            mpu_data = (mpu_data_ptr +  (i + vecSize) );
+            sumX += mpu_data->xAccel;
+            sumY += mpu_data->yAccel;
+            sumZ += mpu_data->zAccel;
+            //my_printf("%i) %i - AccelX = %i\n", i, i + vecSize, mpu_data->xAccel);
+          }
+
+        }
+        return (sumX +sumY + sumZ)/totalPos;
+}
+
+int my_abs_16(int x)
+{
+  int y = (x >> 15);
+  return (x ^ y) - y;
+}
+
+long my_abs_32(long x)
+{
+  long y = (x >> 31);
+  return (x ^ y) - y;
+}
+/*
+// This average not precise to make it quicker (3 LSB are ignored)
+// Max 8 values to sum, otherwise overflow is possible
+int getAverageAcell(struct MPU_Data * mpu_data_ptr, volatile char startPos, unsigned char totalPos, unsigned char vecSize) {
+        struct MPU_Data * mpu_data;
+        //volatile int sumX = 0;
+        //volatile int sumY = 0;
+        //volatile int sumZ = 0;
+        for(volatile char i = startPos; i > (startPos - totalPos) ; i--) {
+          if (i >= 0) {
+            mpu_data = (mpu_data_ptr + i );
+            //sumX += (mpu_data->xAccel) >> 3);
+            //sumY += (mpu_data->yAccel) >> 3);
+            //sumZ += (mpu_data->zAccel) >> 3);
+            my_printf("%i) %i - AccelX = %i\n", i, i , mpu_data->xAccel);
+            //my_printf("%x\n",   mpu_data  );
+
+
+            
+          } else {
+            mpu_data = (mpu_data_ptr +  (i + vecSize) );
+            //sumX += (mpu_data->xAccel) >> 3);
+            //sumY += (mpu_data->yAccel) >> 3);
+            //sumZ += (mpu_data->zAccel) >> 3);
+            my_printf("%i) %i - AccelX = %i\n", i, i + vecSize, mpu_data->xAccel);
+            //my_printf("%x\n",  mpu_data  );
+          }
+
+        }
+        //sumX /= totalPos;
+        //sumY /= totalPos;
+        //sumZ /= totalPos;
+        //sumX >> 3;
+        //sumY >> 3;
+        //sumZ >> 3;
+        
+}
+*/
+void Atraso_ms(volatile unsigned int x)
+{
+        volatile unsigned int aux1;
+        aux1 = x;
+        for(; aux1>0;aux1--) {
+        }
 }
 
 
@@ -171,30 +321,17 @@ void getMPUData(struct MPU_Data * mpu_data) {
 
 void printMPUData(struct MPU_Data * mpu_data) {
 
-    volatile unsigned char value[10];
-    
-    volatile unsigned char desc[] ="\nAccel (x - y - z):\n";
-    displayMsg(desc);
-    intToCharArray(value, mpu_data->xAccel, ' ');
-    displayMsg(value);
-    intToCharArray(value, mpu_data->yAccel, ' ');
-    displayMsg(value); 
-    intToCharArray(value, mpu_data->zAccel, '\n');
-    displayMsg(value); 
-    
-    volatile unsigned char desc2[] ="Gyro (x - y - z):\n";
-    displayMsg(desc2);
-    intToCharArray(value, mpu_data->xGyro, ' ');
-    displayMsg(value);
-    intToCharArray(value, mpu_data->yGyro, ' ');
-    displayMsg(value); 
-    intToCharArray(value, mpu_data->zGyro, '\n');
-    displayMsg(value); 
-         
+  my_printf("\nAccel: \n");
+  my_printf("|x = %i | y = %i | z = %i\n", mpu_data->xAccel, mpu_data->yAccel, mpu_data->zAccel );
+
+ 
+  my_printf("Gyro: \n");
+  my_printf("|x = %i | y = %i | z = %i\n", mpu_data->xGyro, mpu_data->yGyro, mpu_data->zGyro );
+      
 }
 
 
-void intToCharArray(volatile unsigned char * c_arr, int number, char last)
+void intToCharArray(unsigned char * c_arr, int number, char last)
 {
   if(number < 0) {
     c_arr[0] = '-';
@@ -216,7 +353,7 @@ void intToCharArray(volatile unsigned char * c_arr, int number, char last)
   }
 }
 
-void unsignedIntToCharArray(volatile unsigned char * c_arr, unsigned int number, char last)
+void unsignedIntToCharArray(unsigned char * c_arr, unsigned int number, char last)
 {
   c_arr[0] = (unsigned char)((number/10000)) + '0';
   c_arr[1] = (unsigned char)((number%10000)/1000) + '0';
@@ -272,10 +409,14 @@ void setup_UART(void)
 // Interrupção por recebimento de byte via UART
 interrupt(USCIAB0RX_VECTOR) Receive_Data(void)
 {
+
+  if (IFG2&UCA0RXIFG) {
         // Guardar valor recebido via UART na variavel data_in
         data_in = UCA0RXBUF;
-        //sendChar(data_in);
+
+        //IFG2 &= ~UCA0RXIFG;
         LPM0_EXIT;
+  }
 }
 
 
@@ -286,6 +427,15 @@ void WakeUpMPU(void)
   // Wake up the MPU-6050
   TX_Data[1] = 0x6B;            // address of PWR_MGMT_1 register
   TX_Data[0] = 0x00;            // set register to zero (wakes up the MPU-6050)
+  TX_ByteCtr = 2;
+  i2cWrite(MPU_ADDRESS);
+}
+
+void SleepMPU(void)
+{
+  // Wake up the MPU-6050
+  TX_Data[1] = 0x6B;            // address of PWR_MGMT_1 register
+  TX_Data[0] = 0xFF;            // set register to zero (wakes up the MPU-6050)
   TX_ByteCtr = 2;
   i2cWrite(MPU_ADDRESS);
 }
@@ -388,3 +538,95 @@ __interrupt void USCIAB0TX_ISR(void)
   }
 }
 
+
+
+void my_putc(char outData)
+{
+        while((UCA0TXIFG & IFG2) == 0);
+        UCA0TXBUF = outData;
+}
+
+//void putc(unsigned);
+void my_puts(char *s) { while(*s) my_putc(*s++); }
+
+static const unsigned long dv[] = {
+//  4294967296      // 32 bit unsigned max
+    1000000000,     // +0
+     100000000,     // +1
+      10000000,     // +2
+       1000000,     // +3
+        100000,     // +4
+//       65535      // 16 bit unsigned max     
+         10000,     // +5
+          1000,     // +6
+           100,     // +7
+            10,     // +8
+             1,     // +9
+};
+
+static void xtoa(unsigned long x, const unsigned long *dp)
+{
+    char c;
+    unsigned long d;
+    if(x) {
+        while(x < *dp) ++dp;
+        do {
+            d = *dp++;
+            c = '0';
+            while(x >= d) ++c, x -= d;
+            my_putc(c);
+        } while(!(d & 1));
+    } else
+        my_putc('0');
+}
+
+static void puth(unsigned n)
+{
+    static const char hex[16] = { '0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F'};
+    my_putc(hex[n & 15]);
+}
+ 
+void my_printf(char *format, ...)
+{
+    char c;
+    int i;
+    long n;
+    
+    va_list a;
+    va_start(a, format);
+    while(c = *format++) {
+        if(c == '%') {
+            switch(c = *format++) {
+                case 's':                       // String
+                    my_puts(va_arg(a, char*));
+                    break;
+                case 'c':                       // Char
+                    my_putc(va_arg(a, char));
+                    break;
+                case 'i':                       // 16 bit Integer
+                case 'u':                       // 16 bit Unsigned
+                    i = va_arg(a, int);
+                    if(c == 'i' && i < 0) i = -i, my_putc('-');
+                    xtoa((unsigned)i, dv + 5);
+                    break;
+                case 'l':                       // 32 bit Long
+                case 'n':                       // 32 bit uNsigned loNg
+                    n = va_arg(a, long);
+                    if(c == 'l' &&  n < 0) n = -n, my_putc('-');
+                    xtoa((unsigned long)n, dv);
+                    break;
+                case 'x':                       // 16 bit heXadecimal
+                    i = va_arg(a, int);
+                    puth(i >> 12);
+                    puth(i >> 8);
+                    puth(i >> 4);
+                    puth(i);
+                    break;
+                case 0: return;
+                default: goto bad_fmt;
+            }
+        } else
+bad_fmt:    my_putc(c);
+    }
+    va_end(a);
+}
