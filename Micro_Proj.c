@@ -46,8 +46,13 @@
 #define TX BIT2
 /* END */
 
+#define LED BIT0
+
 #define DELAY_PUNCHES 100
-#define PUNCH_THRESHOLD 70000
+#define PUNCH_THRESHOLD 70000 // 32 Bit
+#define GAME_OVER_TIME 60000 // 10 Minutes, 100 = 1 Second
+#define TIMER_PRECISION 10000 // 10ms, 1000 = 1ms
+
 
 /* 
  *  MPU6050 
@@ -64,6 +69,11 @@ struct MPU_Data {
   int temp;
   int statusRegister;
 
+};
+
+struct PlayerTime {
+  unsigned char playerNum;
+  unsigned int playerTime;
 };
 
 unsigned char RX_Data[15];
@@ -84,6 +94,9 @@ void WakeUpMPU(void);
  void setup_UART(void);
 
  volatile unsigned char data_in = '0';
+ volatile unsigned int timer = 0;
+ volatile char timer_enabled = 0;
+ struct PlayerTime bestPlayer;
 /* END */
 
 
@@ -111,6 +124,8 @@ int main(void)
   //SleepMPU();
   //Atraso_ms(100);
   //WakeUpMPU();
+  P1OUT &= ~LED;
+  P1DIR |= LED;
 
   Atraso_ms(10000);
   setup_UART();
@@ -126,21 +141,40 @@ int main(void)
   unsigned char totalPunches = 200;
   volatile unsigned char punch = 0;
   
+
   unsigned char enabled = 0;
+  
   while (1 | mpu_vector_position++)
   {
     if(mpu_vector_position >= 10) {
       mpu_vector_position = 0;
     }
+
+    if( punch == 1  && timer_enabled == 0 ) {
+      start_TIMER();
+    }
+
+    if( timer == GAME_OVER_TIME ) {
+      Atraso_ms_2(50000); // Delay for sending data via bluetooth.
+      my_printf("(4) GAME OVER");
+      punch = 0;
+      enabled = 0;
+    }
     
     if( punch >= totalPunches) {
+      stop_TIMER();
+      if( timer < bestPlayer.playerTime || currentPlayer == 1 ) {
+        bestPlayer.playerTime = timer;
+        bestPlayer.playerNum = currentPlayer; 
+      }
       punch = 0;
       enabled = 0;
       if(currentPlayer >= totalPlayers) {
-        Atraso_ms_2(20000);
-        my_printf("(4)Jogador 1");
+        Atraso_ms_2(50000);
+        my_printf("(4) Jogador%u-%uSPM", bestPlayer.playerNum, punchesPerSec(totalPunches -1, bestPlayer.playerTime));
       }
     }
+
     
     if(data_in == 'a') {
       data_in = 0; 
@@ -163,7 +197,7 @@ int main(void)
       enabled = 0;
       //my_printf("Punches = %i, players = %i", totalPunches,totalPlayers);
       my_printf("(1)%i, %i", totalPunches,totalPlayers);
-        Atraso_ms_2(20000);
+        Atraso_ms_2(50000);
         my_printf("(4) ");
       data_in = 0;
     }
@@ -185,11 +219,11 @@ int main(void)
         data_in = 0;  
       }        
     }
+
     
     if(data_in == '3') {
       if (MPUStatus() == 1){
-           P1DIR |= BIT0;
-           P1OUT ^= BIT0;
+           P1OUT ^= LED;
       }
       data_in = 0;    
     }
@@ -240,7 +274,7 @@ int main(void)
     }  
     
     getMPUData(&(mpu_data[mpu_vector_position]));
-    Atraso_ms(10); // Maybe change this valeu -- without it we get some wrong results.
+    Atraso_ms(10); // Maybe change this value -- without it we get some wrong results.
 
     
     if(next_punch <= DELAY_PUNCHES) {
@@ -317,44 +351,15 @@ long my_abs_32(long x)
   long y = (x >> 31);
   return (x ^ y) - y;
 }
-/*
-// This average not precise to make it quicker (3 LSB are ignored)
-// Max 8 values to sum, otherwise overflow is possible
-int getAverageAcell(struct MPU_Data * mpu_data_ptr, volatile char startPos, unsigned char totalPos, unsigned char vecSize) {
-        struct MPU_Data * mpu_data;
-        //volatile int sumX = 0;
-        //volatile int sumY = 0;
-        //volatile int sumZ = 0;
-        for(volatile char i = startPos; i > (startPos - totalPos) ; i--) {
-          if (i >= 0) {
-            mpu_data = (mpu_data_ptr + i );
-            //sumX += (mpu_data->xAccel) >> 3);
-            //sumY += (mpu_data->yAccel) >> 3);
-            //sumZ += (mpu_data->zAccel) >> 3);
-            my_printf("%i) %i - AccelX = %i\n", i, i , mpu_data->xAccel);
-            //my_printf("%x\n",   mpu_data  );
-
-
-            
-          } else {
-            mpu_data = (mpu_data_ptr +  (i + vecSize) );
-            //sumX += (mpu_data->xAccel) >> 3);
-            //sumY += (mpu_data->yAccel) >> 3);
-            //sumZ += (mpu_data->zAccel) >> 3);
-            my_printf("%i) %i - AccelX = %i\n", i, i + vecSize, mpu_data->xAccel);
-            //my_printf("%x\n",  mpu_data  );
-          }
-
-        }
-        //sumX /= totalPos;
-        //sumY /= totalPos;
-        //sumZ /= totalPos;
-        //sumX >> 3;
-        //sumY >> 3;
-        //sumZ >> 3;
-        
+unsigned int punchesPerSec(unsigned int numPunches, unsigned int timePunches)
+{
+  //long minute = (1000000 / TIMER_PRECISION)*60;
+  //return minute*numPunches/timePunches;
+  
+  unsigned long punSec = 6000*numPunches/timePunches;
+  return ((unsigned int) punSec);
 }
-*/
+
 void Atraso_ms(volatile unsigned int x)
 {
         volatile unsigned int aux1;
@@ -501,8 +506,28 @@ interrupt(USCIAB0RX_VECTOR) Receive_Data(void)
   }
 }
 
+void start_TIMER(void) {
+  timer = 0;
 
+  TACCR0 = TIMER_PRECISION - 1;
+  TACTL = TASSEL_2 + ID_0 + MC_1 + TAIE + TACLR;
+  timer_enabled = 1;
+  
+  _BIS_SR(GIE);
+}
 
+void stop_TIMER(void) {
+  TACTL = MC_0;
+  timer_enabled = 0;
+}
+
+interrupt(TIMER0_A1_VECTOR) TA0_ISR(void)
+{
+  timer++;
+  //P1OUT ^= LED;
+  TACTL &= ~TAIFG;
+  
+}
 
 void WakeUpMPU(void)
 {
