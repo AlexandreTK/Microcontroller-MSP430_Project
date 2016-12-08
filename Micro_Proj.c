@@ -2,6 +2,8 @@
  * I2C_Accel_MPU6050
  *  P1.6          UCB0SCL
  *  P1.7          UCB0SDA
+ *  P1.1          TXD
+ *  P1.2          RXD
  *
  */
 #include <msp430g2553.h>
@@ -45,7 +47,7 @@
 /* END */
 
 #define DELAY_PUNCHES 100
-#define PUNCH_THRESHOLD 30000
+#define PUNCH_THRESHOLD 70000
 
 /* 
  *  MPU6050 
@@ -112,27 +114,76 @@ int main(void)
 
   Atraso_ms(10000);
   setup_UART();
-  my_printf("%s", "1) Test I2C\n");
+  //my_printf("%s", "1) Test I2C\n");
 
   struct MPU_Data mpu_data[10];
   volatile unsigned char mpu_vector_position = 0;
+  volatile long next_punch = 0; // Used as delay from current punch to next punch to be measured
+
+  
+  unsigned char totalPlayers = 0;
+  unsigned char currentPlayer = 0;
+  unsigned char totalPunches = 200;
   volatile unsigned char punch = 0;
-  volatile long next_punch = 0;
+  
+  unsigned char enabled = 0;
   while (1 | mpu_vector_position++)
   {
     if(mpu_vector_position >= 10) {
       mpu_vector_position = 0;
     }
-      
-    if(data_in == '2') {
-      my_printf("Punches = %i, now = 0", punch);
+    
+    if( punch >= totalPunches) {
       punch = 0;
-      
-      my_printf("Next Punches = %l, now = 0", next_punch);
+      enabled = 0;
+      if(currentPlayer >= totalPlayers) {
+        Atraso_ms_2(20000);
+        my_printf("(4)Jogador 1");
+      }
+    }
+    
+    if(data_in == 'a') {
+      data_in = 0; 
+      int data_received = 0;
+      while(data_received<2) {
+        if(data_in != 0) {
+          if(data_received==0) {
+            totalPunches = data_in;
+            data_received++;
+          } else if(data_received==1) {
+            totalPlayers = data_in;
+            data_received++;
+          }
+          data_in = 0;
+        }
+      }
+      punch = 0;      
       next_punch = 0;
-
-      
-      data_in = 0;          
+      currentPlayer = 0;
+      enabled = 0;
+      //my_printf("Punches = %i, players = %i", totalPunches,totalPlayers);
+      my_printf("(1)%i, %i", totalPunches,totalPlayers);
+        Atraso_ms_2(20000);
+        my_printf("(4) ");
+      data_in = 0;
+    }
+    
+    if(data_in == '1') {
+      if (currentPlayer < totalPlayers) {
+        //my_printf("Punches = %i, now = 0", punch);
+        punch = 0;
+        
+        //my_printf("Next Punches = %l, now = 0", next_punch);
+        next_punch = 0;
+        currentPlayer++;
+        my_printf("(2)%i  ", currentPlayer);
+        //Atraso_ms(60000);
+        my_printf("(3)%i  ", punch);
+        //my_printf(" (3)%i", punch);
+        enabled = 1;
+        
+        data_in = 0;  
+      }        
     }
     
     if(data_in == '3') {
@@ -196,14 +247,32 @@ int main(void)
       next_punch++;
     }
     else {
-      long avgBefore = getAverageAcell(mpu_data, mpu_vector_position - 3, 7, 10);
-      long avgAfter = getAverageAcell(mpu_data, mpu_vector_position, 3, 10);
-      long dif = (avgAfter - avgBefore);
-      if(my_abs_32(dif) > PUNCH_THRESHOLD && next_punch >= DELAY_PUNCHES) {
-        next_punch = 0;
-        my_printf("Punch %i\n", ++punch);
-        //Atraso_ms(100000); // Instead of this something else ... continue analysing data but do not consider it a punch
-     
+      if(enabled == 1) {
+        long avgBefore = getAverageAcell(mpu_data, mpu_vector_position - 3, 7, 10);
+        long avgAfter = getAverageAcell(mpu_data, mpu_vector_position, 3, 10);
+        long dif = (avgAfter - avgBefore);
+        if(my_abs_32(dif) > PUNCH_THRESHOLD && next_punch >= DELAY_PUNCHES) {
+  
+          next_punch = 0;
+          //my_printf("Punch %i\n", ++punch);
+          punch++;
+          my_printf("(3)%i ", punch);
+          //Atraso_ms(100000); // Instead of this something else ... continue analysing data but do not consider it a punch
+        }
+/*
+       for(volatile char i = mpu_vector_position; i > (mpu_vector_position - 10) ; i--) {
+          if (i >= 0) {
+            //my_printf("AccelX = %i - - AccelY = %i  \n", mpu_data[i].xAccel, mpu_data[i].yAccel);
+            my_printf("GyroX = %i - - GyroY = %i  \n", mpu_data[i].xGyro, mpu_data[i].yGyro);
+
+          } else {
+            //my_printf("AccelX = %i - - AccelY = %i  \n", mpu_data[i+10].xAccel, mpu_data[i+10].yAccel);
+            my_printf("GyroX = %i - - GyroY = %i  \n", mpu_data[i+10].xGyro, mpu_data[i+10].yGyro);
+          }
+        }
+*/
+
+ 
       }
     }
   }
@@ -233,7 +302,8 @@ long getAverageAcell(struct MPU_Data * mpu_data_ptr, volatile char startPos, uns
           }
 
         }
-        return (sumX +sumY + sumZ)/totalPos;
+        //return (sumX +sumY + sumZ)/totalPos;
+        return (sumX +sumY*2)/totalPos;
 }
 
 int my_abs_16(int x)
@@ -293,6 +363,18 @@ void Atraso_ms(volatile unsigned int x)
         }
 }
 
+void Atraso_ms_2(volatile unsigned int x)
+{
+        volatile unsigned int aux1;
+        volatile unsigned int aux2;
+        aux1 = x;
+        aux2 = x;
+        for(; aux1>0;aux1--) {
+          for(; aux2>0;aux2--) {
+          
+          }
+        }
+}
 
 void getMPUData(struct MPU_Data * mpu_data) {
 
